@@ -13,6 +13,25 @@ cargo run --release
 
 Esc or close the window to quit.
 
+## Prebuilt binaries
+
+When the `version` in `Cargo.toml` is bumped on `master`, CI publishes a
+[GitHub Release](https://github.com/lra/3dcube/releases) with archives for:
+
+- Linux x86_64 and ARM64
+- macOS ARM64 and x86_64
+- Windows x86_64 and ARM64
+- Web: `cube-<version>-web.zip` with `index.html` + `cube.wasm`, ready to
+  serve from any static host
+
+Each native archive is a single `cube` binary (`.exe` on Windows). Release
+notes are generated automatically from commits and pull requests since the
+previous tag.
+
+To cut a release: bump `version` in `Cargo.toml` (and commit the lockfile if
+dependencies changed), merge to `master`. CI tags `v<version>` and uploads the
+archives once that tag does not already exist.
+
 ## Web (wasm)
 
 The renderer also builds for the browser — no wasm-bindgen or npm, just a

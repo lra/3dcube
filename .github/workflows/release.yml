@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.version.outputs.should_release }}
+      version: ${{ steps.version.outputs.version }}
+      prev_tag: ${{ steps.version.outputs.prev_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Detect version bump
+        id: version
+        run: |
+          set -euo pipefail
+
+          VERSION=$(cargo metadata --format-version=1 --no-deps \
+            | jq -r '.packages[] | select(.name == "cube") | .version')
+
+          if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
+            echo "Failed to parse package version from cargo metadata" >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package version: $VERSION"
+
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          echo "Previous tag: ${PREV_TAG:-<none>}"
+
+          if git rev-parse "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists — skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag v${VERSION} does not exist — will release."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="cube-${VERSION}-${TARGET}.tar.gz"
+          tar -czf "$ARCHIVE" -C "target/${TARGET}/release" cube
+          ls -la "$ARCHIVE"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $archive = "cube-$env:VERSION-$env:TARGET.zip"
+          Compress-Archive -Path "target/$env:TARGET/release/cube.exe" -DestinationPath $archive
+          Get-Item $archive
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cube-${{ needs.prepare.outputs.version }}-${{ matrix.target }}
+          path: cube-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  build-web:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build and package
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target wasm32-unknown-unknown --lib
+          cp target/wasm32-unknown-unknown/release/cube.wasm web/
+          ARCHIVE="cube-${VERSION}-web.zip"
+          (cd web && zip "../${ARCHIVE}" index.html cube.wasm)
+          ls -la "$ARCHIVE"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cube-${{ needs.prepare.outputs.version }}-web
+          path: cube-${{ needs.prepare.outputs.version }}-web.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build, build-web]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          pattern: cube-${{ needs.prepare.outputs.version }}-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PREV_TAG: ${{ needs.prepare.outputs.prev_tag }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No release archives found under artifacts/" >&2
+            find artifacts -type f || true
+            exit 1
+          fi
+
+          notes_args=(--generate-notes)
+          if [[ -n "${PREV_TAG}" ]]; then
+            notes_args+=(--notes-start-tag "${PREV_TAG}")
+          fi
+
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            "${notes_args[@]}" \
+            "${assets[@]}"
