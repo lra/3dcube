@@ -5,9 +5,19 @@ uniquely tinted blue faces, brightness per face = ambient + `dot(normal, light)`
 (diffuse shading), perspective projection, backface culling. Only dependency is
 [minifb](https://crates.io/crates/minifb) for the window and pixel buffer.
 
-## Run
+## Install
 
+With Homebrew:
+
+```sh
+brew install lra/tap/cube
 ```
+
+Or grab a binary for your platform from the
+[latest release](https://github.com/lra/3dcube/releases/latest), or build from
+source:
+
+```sh
 cargo run --release
 ```
 
@@ -30,7 +40,8 @@ previous tag.
 
 To cut a release: bump `version` in `Cargo.toml` (and commit the lockfile if
 dependencies changed), merge to `master`. CI tags `v<version>` and uploads the
-archives once that tag does not already exist.
+archives once that tag does not already exist, then bumps the
+[Homebrew formula](https://github.com/lra/homebrew-tap/blob/master/Formula/cube.rb).
 
 ## Web (wasm)
 
