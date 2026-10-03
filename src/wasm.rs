@@ -24,7 +24,7 @@ pub extern "C" fn cube_frame(p: *mut WasmCube) -> *const u8 {
     let c = unsafe { &mut *p };
     render(c.t, &mut c.buf);
     c.t += 0.02;
-    for (px, out) in c.buf.iter().zip(c.rgba.chunks_exact_mut(4)) {
+    for (px, out) in c.buf.iter().zip(c.rgba.as_chunks_mut::<4>().0) {
         out[0] = (px >> 16) as u8;
         out[1] = (px >> 8) as u8;
         out[2] = *px as u8;
